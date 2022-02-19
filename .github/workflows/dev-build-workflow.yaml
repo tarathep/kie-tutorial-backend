@@ -1,0 +1,148 @@
+name: DEV - Build
+
+on:
+  workflow_dispatch:
+  
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - develop
+
+env:
+  APP_NAME: kie-tutorial-backend
+  CONTAINER_REPOSITORY: "acrkietutorial001.azurecr.io"
+  IMAGE_TAG: "0.0.1-SNAPSHOT"
+
+jobs:
+  unitest:
+    name: UnitTest
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+    
+    - name: Setup go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '^1.17.6' # The Go version to download (if necessary) and use.
+
+    - run: |
+        go version
+
+    - name: Install dependencies
+      run: |
+        go env -w GO111MODULE=on
+        go get -u github.com/gin-gonic/gin
+        go get -u go.mongodb.org/mongo-driver/mongo
+        go get -u github.com/stretchr/testify
+        go mod vendor
+
+    - name: Unit test
+      run: |
+        go test -coverprofile coverage.out ./...
+        go tool cover -html coverage.out -o report.html
+
+    - name: Upload Reports
+      uses: actions/upload-artifact@v2
+      with:
+        name: Unit Test Results
+        path: '${{ github.workspace }}/report.html'
+
+  analyze:
+    name: SAST CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'go' ]
+        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python' ]
+        # Learn more:
+        # https://docs.github.com/en/free-pro-team@latest/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#changing-the-languages-that-are-analyzed
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    # Initializes the CodeQL tools for scanning.
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v1
+      with:
+        languages: ${{ matrix.language }}
+        # If you wish to specify custom queries, you can do so here or in a config file.
+        # By default, queries listed here will override any specified in a config file.
+        # Prefix the list here with "+" to use these queries and those in the config file.
+        # queries: ./path/to/local/query, your-org/your-repo/queries@main
+
+    # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
+    # If this step fails, then you should remove it and run the build manually (see below)
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v1
+
+    # ℹ️ Command-line programs to run using the OS shell.
+    # 📚 https://git.io/JvXDl
+
+    # ✏️ If the Autobuild fails above, remove it and uncomment the following three lines
+    #    and modify them (or add more) to build your code if your project
+    #    uses a compiled language
+
+    #- run: |
+    #   make bootstrap
+    #   make release
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v1
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    environment: 
+      name: dev
+      url: https://github.com/tarathep/kie-tutorial-pipeline/actions/workflows/dev-tutorial-backend-deploy.yml
+    needs: [unitest,analyze] # if on env sit don't use
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+    
+    - name: Build image
+      id: docker_build
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        tags: ${{ env.CONTAINER_REPOSITORY }}/${{ env.APP_NAME }}:${{env.IMAGE_TAG}}
+
+    - name: "ACR login"
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.CONTAINER_REPOSITORY }}
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+
+    - name: Push image
+      run: docker image push ${{ env.CONTAINER_REPOSITORY }}/${{ env.APP_NAME }}:${{env.IMAGE_TAG}}
+
+    - name: Repository Dispatch
+      uses: peter-evans/repository-dispatch@v1
+      with:
+        token: ${{ secrets.REPO_ACCESS_TOKEN }}
+        repository: tarathep/kie-tutorial-pipeline
+        event-type: kie-tutorial-backend-cd-dev
+        client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
+
+
+    
+
+    
+
+
+
+
+    
